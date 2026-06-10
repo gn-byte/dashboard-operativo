@@ -47,7 +47,7 @@
     .panel-title{font-size:.95rem;font-weight:800;letter-spacing:.13em;text-transform:uppercase;color:#fff}
 
     /* ── Tablas ── */
-    .op-table{width:100%;border-collapse:collapse;font-size:1rem}
+    .op-table{width:100%;border-collapse:collapse;font-size:1rem;table-layout:fixed}
     .op-table th{
       background:linear-gradient(180deg,#f5f9ff 0%,#edf3fb 100%);
       color:#042D59;font-weight:700;text-transform:uppercase;letter-spacing:.06em;font-size:.78rem;
@@ -161,11 +161,11 @@
       if(d<=30)return{background:'#dcfce7'}; // ≤30 días → verde suave
       return{};
     }
-    function badgeAlert(iso){
+    function badgeAlert(iso,overdueLabel='VENCIDO'){
       const d=daysUntil(iso);
       if(d===null)return null;
       const pill={borderRadius:5,padding:'2px 8px',fontSize:'.7rem',fontWeight:800,color:'#fff',marginLeft:7,display:'inline-block',lineHeight:1.5,verticalAlign:'middle',letterSpacing:'.03em'};
-      if(d<0)return<span style={{...pill,background:'#dc2626'}}>VENCIDO</span>;
+      if(d<0)return<span style={{...pill,background:'#dc2626'}}>{overdueLabel}</span>;
       if(d===0)return<span style={{...pill,background:'#dc2626'}}>HOY</span>;
       if(d<=7)return<span style={{...pill,background:'#d97706'}}>{d}d</span>;
       if(d<=30)return<span style={{...pill,background:'#16a34a'}}>{d}d</span>;
@@ -184,23 +184,82 @@
         return dir==='asc'?cmp:-cmp;
       });
     }
-    function SortTh({label,field,sort,onSort,style}){
-      const active=sort.key===field;
+    // Anchos de columna por defecto (deben sumar 100 por tabla)
+    const COL_DEF={
+      sp:[34,21,21,14,10],
+      se:[20,18,18,17,13,14],
+      dp:[36,22,22,12,8],
+      de:[22,30,18,16,8,6],
+    };
+
+    // Hook: redimensionar columnas (sincronizado con Firebase)
+    function useColWidths(tableKey){
+      const{state,dispatch}=useStore();
+      const tableRef=useRef(null);
+      const latestCW=useRef(state.layout?.colWidths||{});
+      useEffect(()=>{latestCW.current=state.layout?.colWidths||{};},[state.layout?.colWidths]);
+      const widths=state.layout?.colWidths?.[tableKey]||COL_DEF[tableKey];
+      function startResize(colIdx,e){
+        e.preventDefault();e.stopPropagation();
+        const el=tableRef.current;if(!el)return;
+        const startX=e.clientX;
+        const tw=el.offsetWidth;
+        const sw=[...widths];
+        function mv(ev){
+          const dx=ev.clientX-startX;
+          const dp=(dx/tw)*100;
+          const nw=[...sw];
+          nw[colIdx]=Math.max(4,sw[colIdx]+dp);
+          if(colIdx+1<nw.length)nw[colIdx+1]=Math.max(4,sw[colIdx+1]-dp);
+          const ths=el.querySelectorAll('thead th');
+          nw.forEach((w,i)=>{if(ths[i])ths[i].style.width=w+'%';});
+        }
+        function up(){
+          window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
+          const ths=el.querySelectorAll('thead th');
+          const fw=Array.from(ths).map(th=>parseFloat(th.style.width)||10);
+          dispatch({type:'UPD_LAYOUT',v:{colWidths:{...latestCW.current,[tableKey]:fw}}});
+        }
+        window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
+      }
+      return{tableRef,widths,startResize};
+    }
+
+    // Hook: ordenamiento sincronizado con Firebase
+    function useTableSort(tableKey){
+      const{state,dispatch}=useStore();
+      const latestSort=useRef(state.layout?.sort||{});
+      useEffect(()=>{latestSort.current=state.layout?.sort||{};},[state.layout?.sort]);
+      const sort=state.layout?.sort?.[tableKey]||{key:null,dir:'asc'};
+      function toggleSort(k){
+        const ns=sort.key===k?{...sort,dir:sort.dir==='asc'?'desc':'asc'}:{key:k,dir:'asc'};
+        dispatch({type:'UPD_LAYOUT',v:{sort:{...latestSort.current,[tableKey]:ns}}});
+      }
+      return{sort,toggleSort};
+    }
+
+    // Columna unificada: sort + resize handle (recibe todo por props)
+    function ColTh({label,field,sort,onSort,width,colIdx,startResize,last}){
+      const active=field&&sort&&sort.key===field;
       return(
-        <th style={{...style,cursor:'pointer',userSelect:'none',transition:'background .12s'}}
-          onClick={()=>onSort(field)}
-          onMouseEnter={e=>e.currentTarget.style.background='#e2ecf8'}
-          onMouseLeave={e=>e.currentTarget.style.background=''}>
-          <span style={{display:'inline-flex',alignItems:'center',gap:5}}>
+        <th style={{width:width+'%',cursor:field?'pointer':'default',
+          userSelect:'none',position:'relative',overflow:'hidden'}}
+          onClick={field&&onSort?()=>onSort(field):undefined}
+          onMouseEnter={field?e=>e.currentTarget.style.background='#e2ecf8':undefined}
+          onMouseLeave={field?e=>e.currentTarget.style.background='':undefined}>
+          <span style={{display:'inline-flex',alignItems:'center',gap:5,paddingRight:last?0:10}}>
             {label}
-            <span style={{
-              fontSize:'.65rem',lineHeight:1,transition:'opacity .15s',
-              opacity:active?1:.22,
-              color:active?'#042D59':'inherit',
-              fontWeight:active?900:400}}>
+            {field&&sort&&<span style={{fontSize:'.62rem',lineHeight:1,
+              opacity:active?1:.2,color:active?'#042D59':'inherit',fontWeight:active?900:400}}>
               {active?(sort.dir==='asc'?'▲':'▼'):'⇅'}
-            </span>
+            </span>}
           </span>
+          {!last&&<div onMouseDown={e=>{e.stopPropagation();startResize(colIdx,e);}}
+            style={{position:'absolute',right:0,top:0,bottom:0,width:6,
+              cursor:'col-resize',zIndex:3,background:'transparent',borderRight:'2px solid transparent'}}
+            onMouseEnter={e=>e.currentTarget.style.borderRight='2px solid rgba(4,45,89,.5)'}
+            onMouseLeave={e=>e.currentTarget.style.borderRight='2px solid transparent'}
+          />}
         </th>
       );
     }
@@ -238,7 +297,11 @@
       distribucionesPendientes:[],distribucionesEnCurso:[],distribucionesHistory:[],
       fondos:FONDOS_INIT,
       notasDetalles:{left:'',right:''},
-      layout:{leftPct:50,topPct:50,suscTopPct:50,distTopPct:50},
+      layout:{
+        leftPct:50,topPct:50,suscTopPct:50,distTopPct:50,
+        colWidths:{sp:[34,21,21,14,10],se:[20,18,18,17,13,14],dp:[36,22,22,12,8],de:[22,30,18,16,8,6]},
+        sort:{sp:{key:null,dir:'asc'},se:{key:null,dir:'asc'},dp:{key:null,dir:'asc'},de:{key:null,dir:'asc'}},
+      },
     };
 
     // ── Reducer ────────────────────────────────────────────────────────────
@@ -312,7 +375,11 @@
         distribucionesHistory:  toArr(data.distribucionesHistory),
         fondos:                 data.fondos!=null?toArr(data.fondos):FONDOS_INIT,
         notasDetalles:          data.notasDetalles||{left:'',right:''},
-        layout:                 data.layout||INIT.layout,
+        layout:{
+          ...INIT.layout,...(data.layout||{}),
+          colWidths:{...INIT.layout.colWidths,...(data.layout?.colWidths||{})},
+          sort:{...INIT.layout.sort,...(data.layout?.sort||{})},
+        },
       };
     }
 
@@ -678,8 +745,8 @@
     function SuscripcionTable(){
       const{state,dispatch}=useStore();
       const[ed,setEd]=useState(null);
-      const[sort,setSort]=useState({key:null,dir:'asc'});
-      function toggleSort(k){setSort(s=>s.key===k?{...s,dir:s.dir==='asc'?'desc':'asc'}:{key:k,dir:'asc'});}
+      const{sort,toggleSort}=useTableSort('sp');
+      const{tableRef,widths,startResize}=useColWidths('sp');
       function save(){
         if(!ed)return;
         const{isNew,...d}=ed;
@@ -699,13 +766,13 @@
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <table className="op-table">
+            <table className="op-table" ref={tableRef}>
               <thead><tr>
-                <SortTh label="Evento pendiente" field="eventoPendiente" sort={sort} onSort={toggleSort} style={{width:'34%'}}/>
-                <SortTh label="Fecha capital call" field="fechaCapitalCall" sort={sort} onSort={toggleSort} style={{width:'21%'}}/>
-                <SortTh label="Plazo máximo" field="plazoMaximo" sort={sort} onSort={toggleSort} style={{width:'21%'}}/>
-                <th style={{width:'14%'}}>Checklist</th>
-                <th style={{width:'10%'}}></th>
+                <ColTh label="Evento pendiente" field="eventoPendiente" sort={sort} onSort={toggleSort} width={widths[0]} colIdx={0} startResize={startResize}/>
+                <ColTh label="Fecha capital call" field="fechaCapitalCall" sort={sort} onSort={toggleSort} width={widths[1]} colIdx={1} startResize={startResize}/>
+                <ColTh label="Plazo máximo" field="plazoMaximo" sort={sort} onSort={toggleSort} width={widths[2]} colIdx={2} startResize={startResize}/>
+                <ColTh label="Checklist" width={widths[3]} colIdx={3} startResize={startResize}/>
+                <ColTh label="" width={widths[4]} colIdx={4} last/>
               </tr></thead>
               <tbody>
                 {rows.length===0&&<tr><td colSpan={5} style={{color:'#94a3b8',textAlign:'center',padding:12,fontStyle:'italic'}}>Sin eventos pendientes</td></tr>}
@@ -736,8 +803,8 @@
       const{state,dispatch}=useStore();
       const[ed,setEd]=useState(null);
       const[showH,setShowH]=useState(false);
-      const[sort,setSort]=useState({key:null,dir:'asc'});
-      function toggleSort(k){setSort(s=>s.key===k?{...s,dir:s.dir==='asc'?'desc':'asc'}:{key:k,dir:'asc'});}
+      const{sort,toggleSort}=useTableSort('se');
+      const{tableRef,widths,startResize}=useColWidths('se');
       function save(){
         if(!ed)return;
         const{isNew,...d}=ed;
@@ -758,14 +825,14 @@
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <table className="op-table">
+            <table className="op-table" ref={tableRef}>
               <thead><tr>
-                <SortTh label="Fondo" field="fondo" sort={sort} onSort={toggleSort} style={{width:'20%'}}/>
-                <SortTh label="Fecha suscripción" field="fechaSuscripcion" sort={sort} onSort={toggleSort} style={{width:'18%'}}/>
-                <SortTh label="Capital call" field="fechaCapitalCall" sort={sort} onSort={toggleSort} style={{width:'18%'}}/>
-                <th style={{width:'17%'}}>Encargado</th>
-                <th style={{width:'13%'}}>Checklist</th>
-                <th style={{width:'14%'}}></th>
+                <ColTh label="Fondo" field="fondo" sort={sort} onSort={toggleSort} width={widths[0]} colIdx={0} startResize={startResize}/>
+                <ColTh label="Fecha suscripción" field="fechaSuscripcion" sort={sort} onSort={toggleSort} width={widths[1]} colIdx={1} startResize={startResize}/>
+                <ColTh label="Capital call" field="fechaCapitalCall" sort={sort} onSort={toggleSort} width={widths[2]} colIdx={2} startResize={startResize}/>
+                <ColTh label="Encargado" width={widths[3]} colIdx={3} startResize={startResize}/>
+                <ColTh label="Checklist" width={widths[4]} colIdx={4} startResize={startResize}/>
+                <ColTh label="" width={widths[5]} colIdx={5} last/>
               </tr></thead>
               <tbody>
                 {rows.length===0&&<tr><td colSpan={6} style={{color:'#94a3b8',textAlign:'center',padding:12,fontStyle:'italic'}}>Sin eventos en curso</td></tr>}
@@ -840,8 +907,8 @@
     function DistribucionTable(){
       const{state,dispatch}=useStore();
       const[ed,setEd]=useState(null);
-      const[sort,setSort]=useState({key:null,dir:'asc'});
-      function toggleSort(k){setSort(s=>s.key===k?{...s,dir:s.dir==='asc'?'desc':'asc'}:{key:k,dir:'asc'});}
+      const{sort,toggleSort}=useTableSort('dp');
+      const{tableRef,widths,startResize}=useColWidths('dp');
       function save(){
         if(!ed)return;
         const{isNew,...d}=ed;
@@ -861,13 +928,13 @@
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <table className="op-table">
+            <table className="op-table" ref={tableRef}>
               <thead><tr>
-                <SortTh label="Evento Pendiente" field="fondo" sort={sort} onSort={toggleSort} style={{width:'36%'}}/>
-                <SortTh label="Distribución recibida" field="fechaDinero" sort={sort} onSort={toggleSort} style={{width:'22%'}}/>
-                <SortTh label="Plazo máximo" field="plazoMaximo" sort={sort} onSort={toggleSort} style={{width:'22%'}}/>
-                <th style={{width:'12%'}}>Checklist</th>
-                <th style={{width:'8%'}}></th>
+                <ColTh label="Evento Pendiente" field="fondo" sort={sort} onSort={toggleSort} width={widths[0]} colIdx={0} startResize={startResize}/>
+                <ColTh label="Distribución recibida" field="fechaDinero" sort={sort} onSort={toggleSort} width={widths[1]} colIdx={1} startResize={startResize}/>
+                <ColTh label="Plazo máximo" field="plazoMaximo" sort={sort} onSort={toggleSort} width={widths[2]} colIdx={2} startResize={startResize}/>
+                <ColTh label="Checklist" width={widths[3]} colIdx={3} startResize={startResize}/>
+                <ColTh label="" width={widths[4]} colIdx={4} last/>
               </tr></thead>
               <tbody>
                 {rows.length===0&&<tr><td colSpan={5} style={{color:'#94a3b8',textAlign:'center',padding:12,fontStyle:'italic'}}>Sin distribuciones pendientes</td></tr>}
@@ -897,8 +964,8 @@
       const{state,dispatch}=useStore();
       const[ed,setEd]=useState(null);
       const[showH,setShowH]=useState(false);
-      const[sort,setSort]=useState({key:null,dir:'asc'});
-      function toggleSort(k){setSort(s=>s.key===k?{...s,dir:s.dir==='asc'?'desc':'asc'}:{key:k,dir:'asc'});}
+      const{sort,toggleSort}=useTableSort('de');
+      const{tableRef,widths,startResize}=useColWidths('de');
       function save(){
         if(!ed)return;
         const{isNew,...d}=ed;
@@ -919,14 +986,14 @@
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <table className="op-table">
+            <table className="op-table" ref={tableRef}>
               <thead><tr>
-                <SortTh label="Fondo" field="fondo" sort={sort} onSort={toggleSort} style={{width:'22%'}}/>
-                <SortTh label="Tipo evento" field="tipoEvento" sort={sort} onSort={toggleSort} style={{width:'30%'}}/>
-                <SortTh label="Fecha pago" field="fechaDinero" sort={sort} onSort={toggleSort} style={{width:'18%'}}/>
-                <th style={{width:'16%'}}>Encargado</th>
-                <th style={{width:'8%'}}>Checklist</th>
-                <th style={{width:'6%'}}></th>
+                <ColTh label="Fondo" field="fondo" sort={sort} onSort={toggleSort} width={widths[0]} colIdx={0} startResize={startResize}/>
+                <ColTh label="Tipo evento" field="tipoEvento" sort={sort} onSort={toggleSort} width={widths[1]} colIdx={1} startResize={startResize}/>
+                <ColTh label="Fecha pago" field="fechaDinero" sort={sort} onSort={toggleSort} width={widths[2]} colIdx={2} startResize={startResize}/>
+                <ColTh label="Encargado" width={widths[3]} colIdx={3} startResize={startResize}/>
+                <ColTh label="Checklist" width={widths[4]} colIdx={4} startResize={startResize}/>
+                <ColTh label="" width={widths[5]} colIdx={5} last/>
               </tr></thead>
               <tbody>
                 {rows.length===0&&<tr><td colSpan={6} style={{color:'#94a3b8',textAlign:'center',padding:12,fontStyle:'italic'}}>Sin distribuciones en curso</td></tr>}
@@ -943,7 +1010,7 @@
                           </select>
                         :<span style={{color:row.tipoEvento?'#1e293b':'#94a3b8'}}>{row.tipoEvento??'—'}</span>}
                       </td>
-                      <td>{isE?<DatePicker value={ed.fechaDinero} onChange={v=>setEd(p=>({...p,fechaDinero:v}))}/>:<span>{fmtDate(row.fechaDinero)}{badgeAlert(row.fechaDinero)}</span>}</td>
+                      <td>{isE?<DatePicker value={ed.fechaDinero} onChange={v=>setEd(p=>({...p,fechaDinero:v}))}/>:<span>{fmtDate(row.fechaDinero)}{badgeAlert(row.fechaDinero,'PENDIENTE')}</span>}</td>
                       <td>{isE?<EncSelect value={ed.encargadoId} onChange={v=>setEd(p=>({...p,encargadoId:v}))}/>:encNm(row.encargadoId)}</td>
                       <td style={{textAlign:'center'}}>{!isE&&<input type="checkbox" className="op-cb" checked={false} onChange={()=>dispatch({type:'DONE_D',id:row.id})} onClick={e=>e.stopPropagation()} title="Completar"/>}</td>
                       <td><div style={{display:'flex',gap:2}}>
