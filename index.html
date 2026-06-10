@@ -665,6 +665,7 @@
       }
       const encNm=id=>id?(state.encargados.find(e=>e.id===id)?.name??'—'):'—';
       const rows=ed?.isNew?[...state.tareas,{id:ed.id,cosa:ed.cosa,plazo:ed.plazo,encargadoId:ed.encargadoId}]:state.tareas;
+      const autoAtrasos=(state.distribucionesPendientes||[]).filter(r=>r.fondo&&daysUntil(r.fechaDinero)!==null&&daysUntil(r.fechaDinero)<=0);
       return(
         <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
           <div className="panel-header">
@@ -683,7 +684,18 @@
                 <th style={{width:'10%'}}></th>
               </tr></thead>
               <tbody>
-                {rows.length===0&&<tr><td colSpan={4} style={{color:'#94a3b8',textAlign:'center',padding:16,fontStyle:'italic'}}>Sin tareas — presiona ＋ para agregar</td></tr>}
+                {autoAtrasos.map(r=>(
+                  <tr key={'auto-'+r.id} style={{background:'#fee2e2',cursor:'default'}}>
+                    <td style={{color:'#991b1b',fontWeight:700}}>
+                      <span style={{display:'inline-block',background:'#dc2626',color:'#fff',borderRadius:4,padding:'1px 7px',fontSize:'.7rem',fontWeight:800,letterSpacing:'.04em',marginRight:8,verticalAlign:'middle'}}>AUTO</span>
+                      ENVIAR CORREO ATRASO DE DISTRIBUCIÓN FONDO {r.fondo.toUpperCase()}
+                    </td>
+                    <td style={{color:'#b91c1c',fontWeight:600}}>{fmtDate(r.fechaDinero)}</td>
+                    <td style={{color:'#94a3b8',fontStyle:'italic'}}>—</td>
+                    <td></td>
+                  </tr>
+                ))}
+                {rows.length===0&&autoAtrasos.length===0&&<tr><td colSpan={4} style={{color:'#94a3b8',textAlign:'center',padding:16,fontStyle:'italic'}}>Sin tareas — presiona ＋ para agregar</td></tr>}
                 {rows.map(row=>{
                   const isE=ed?.id===row.id;
                   return(
