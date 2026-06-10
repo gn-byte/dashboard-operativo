@@ -199,6 +199,7 @@
       distribucionesPendientes:[],distribucionesEnCurso:[],distribucionesHistory:[],
       fondos:FONDOS_INIT,
       notasDetalles:{left:'',right:''},
+      layout:{leftPct:50,topPct:50,suscTopPct:50,distTopPct:50},
     };
 
     // ── Reducer ────────────────────────────────────────────────────────────
@@ -248,6 +249,7 @@
         case'ADD_FONDO':{const n=a.nombre.trim();if(!n||(s.fondos||[]).includes(n))return s;return{...s,fondos:[...(s.fondos||[]),n]};}
         case'DEL_FONDO':return{...s,fondos:(s.fondos||[]).filter(f=>f!==a.nombre)};
         case'UPD_NOTA':return{...s,notasDetalles:{...(s.notasDetalles||{}),[a.side]:a.texto}};
+        case'UPD_LAYOUT':return{...s,layout:{...(s.layout||INIT.layout),...a.v}};
         default:return s;
       }
     }
@@ -271,6 +273,7 @@
         distribucionesHistory:  toArr(data.distribucionesHistory),
         fondos:                 data.fondos!=null?toArr(data.fondos):FONDOS_INIT,
         notasDetalles:          data.notasDetalles||{left:'',right:''},
+        layout:                 data.layout||INIT.layout,
       };
     }
 
@@ -538,7 +541,10 @@
       );
     }
 
-    function TigerDivider({label}){return<div className="tiger-divider">{label}</div>;}
+    function TigerDivider({label,onMouseDown}){
+      return<div className="tiger-divider" onMouseDown={onMouseDown}
+        style={onMouseDown?{cursor:'row-resize'}:undefined}>{label}</div>;
+    }
 
     // ── Tareas Pendientes ──────────────────────────────────────────────────
     function TareasPendientes(){
@@ -756,10 +762,34 @@
     }
 
     function SuscripcionPanel(){
+      const{state,dispatch}=useStore();
+      const ref=useRef(null);
+      const dragging=useRef(false);
+      useEffect(()=>{
+        if(dragging.current)return;
+        const el=ref.current;if(!el)return;
+        el.style.setProperty('--susc-top-pct',state.layout?.suscTopPct??50);
+      },[state.layout?.suscTopPct]);
+      function startDividerDrag(e){
+        e.preventDefault();dragging.current=true;
+        function mv(ev){
+          const el=ref.current;if(!el)return;
+          const r=el.getBoundingClientRect();
+          el.style.setProperty('--susc-top-pct',Math.max(20,Math.min(80,((ev.clientY-r.top)/r.height)*100)));
+        }
+        function up(){
+          const el=ref.current;
+          const pct=parseFloat(el?.style.getPropertyValue('--susc-top-pct')||50);
+          dragging.current=false;
+          window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
+          dispatch({type:'UPD_LAYOUT',v:{suscTopPct:pct}});
+        }
+        window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
+      }
       return(
-        <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
-          <div style={{flex:1,minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><SuscripcionTable/></div>
-          <TigerDivider label="En Curso"/>
+        <div ref={ref} style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
+          <div style={{flexBasis:'calc(var(--susc-top-pct,50)*1%)',flexShrink:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><SuscripcionTable/></div>
+          <TigerDivider label="En Curso" onMouseDown={startDividerDrag}/>
           <div style={{flex:1,minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><EnCursoSusc/></div>
         </div>
       );
@@ -899,10 +929,34 @@
     }
 
     function DistribucionPanel(){
+      const{state,dispatch}=useStore();
+      const ref=useRef(null);
+      const dragging=useRef(false);
+      useEffect(()=>{
+        if(dragging.current)return;
+        const el=ref.current;if(!el)return;
+        el.style.setProperty('--dist-top-pct',state.layout?.distTopPct??50);
+      },[state.layout?.distTopPct]);
+      function startDividerDrag(e){
+        e.preventDefault();dragging.current=true;
+        function mv(ev){
+          const el=ref.current;if(!el)return;
+          const r=el.getBoundingClientRect();
+          el.style.setProperty('--dist-top-pct',Math.max(20,Math.min(80,((ev.clientY-r.top)/r.height)*100)));
+        }
+        function up(){
+          const el=ref.current;
+          const pct=parseFloat(el?.style.getPropertyValue('--dist-top-pct')||50);
+          dragging.current=false;
+          window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);
+          dispatch({type:'UPD_LAYOUT',v:{distTopPct:pct}});
+        }
+        window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
+      }
       return(
-        <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
-          <div style={{flex:1,minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><DistribucionTable/></div>
-          <TigerDivider label="En Curso"/>
+        <div ref={ref} style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
+          <div style={{flexBasis:'calc(var(--dist-top-pct,50)*1%)',flexShrink:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><DistribucionTable/></div>
+          <TigerDivider label="En Curso" onMouseDown={startDividerDrag}/>
           <div style={{flex:1,minHeight:0,overflow:'hidden',display:'flex',flexDirection:'column'}}><EnCursoDist/></div>
         </div>
       );
@@ -910,8 +964,19 @@
 
     // ── Cross Layout ───────────────────────────────────────────────────────
     function CrossLayout({tl,tr,bl,br}){
+      const{state,dispatch}=useStore();
       const ref=useRef(null);
       const drag=useRef(null);
+
+      // Aplica layout guardado en Firebase (también cuando otro usuario lo cambia)
+      useEffect(()=>{
+        if(drag.current)return; // no interrumpir drag activo
+        const el=ref.current;if(!el)return;
+        const{leftPct=50,topPct=50}=state.layout||{};
+        el.style.setProperty('--left-pct',leftPct);
+        el.style.setProperty('--top-pct',topPct);
+      },[state.layout?.leftPct,state.layout?.topPct]);
+
       function startDrag(axis){
         return e=>{
           e.preventDefault();drag.current=axis;
@@ -923,7 +988,15 @@
             if(drag.current==='h'||drag.current==='c')
               el.style.setProperty('--top-pct',Math.max(15,Math.min(85,((ev.clientY-r.top)/r.height)*100)));
           }
-          function up(){drag.current=null;window.removeEventListener('mousemove',mv);window.removeEventListener('mouseup',up);}
+          function up(){
+            const el=ref.current;
+            const leftPct=parseFloat(el?.style.getPropertyValue('--left-pct')||50);
+            const topPct=parseFloat(el?.style.getPropertyValue('--top-pct')||50);
+            drag.current=null;
+            window.removeEventListener('mousemove',mv);
+            window.removeEventListener('mouseup',up);
+            dispatch({type:'UPD_LAYOUT',v:{leftPct,topPct}});
+          }
           window.addEventListener('mousemove',mv);window.addEventListener('mouseup',up);
         };
       }
