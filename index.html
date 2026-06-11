@@ -153,6 +153,109 @@
       const d=new Date(iso+'T00:00:00');d.setHours(0,0,0,0);
       return Math.round((d-hoy)/86400000);
     }
+
+    // ── Feriados y cálculo automático de Plazo Máximo ─────────────────────
+    function toISO(d){return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+    function easterSunday(y){
+      const a=y%19,b=Math.floor(y/100),c=y%100,dd=Math.floor(b/4),e=b%4;
+      const f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3);
+      const h=(19*a+b-dd-g+15)%30,i=Math.floor(c/4),k=c%4;
+      const l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451);
+      const mo=Math.floor((h+l-7*m+114)/31)-1,dy=((h+l-7*m+114)%31)+1;
+      return new Date(y,mo,dy);
+    }
+    function nthWkd(y,mo,dow,n){
+      let d=new Date(y,mo,1),cnt=0;
+      while(true){if(d.getDay()===dow&&++cnt===n)break;d.setDate(d.getDate()+1);}
+      return toISO(d);
+    }
+    function lastWkd(y,mo,dow){
+      let d=new Date(y,mo+1,0);
+      while(d.getDay()!==dow)d.setDate(d.getDate()-1);
+      return toISO(d);
+    }
+    function ferCL(y){
+      const s=new Set();
+      [[0,1],[4,1],[4,21],[6,16],[7,15],[8,18],[8,19],[9,12],[10,1],[11,8],[11,25]].forEach(
+        ([m,d])=>s.add(`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`));
+      if(y>=2021)s.add(`${y}-06-21`); // Día Nacional de los Pueblos Indígenas
+      const e=easterSunday(y);
+      const gf=new Date(e);gf.setDate(e.getDate()-2); // Viernes Santo
+      const hs=new Date(e);hs.setDate(e.getDate()-1); // Sábado Santo
+      s.add(toISO(gf));s.add(toISO(hs));
+      return s;
+    }
+    function ferUS(y){
+      const s=new Set();
+      [[0,1],[5,19],[6,4],[10,11],[11,25]].forEach(
+        ([m,d])=>s.add(`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`));
+      s.add(nthWkd(y,0,1,3));   // MLK Day (3er lunes enero)
+      s.add(nthWkd(y,1,1,3));   // Presidents' Day (3er lunes feb)
+      s.add(lastWkd(y,4,1));    // Memorial Day (último lunes mayo)
+      s.add(nthWkd(y,8,1,1));   // Labor Day (1er lunes sep)
+      s.add(nthWkd(y,9,1,2));   // Columbus Day (2do lunes oct)
+      s.add(nthWkd(y,10,4,4));  // Thanksgiving (4to jueves nov)
+      return s;
+    }
+    // Suma n días hábiles (L-V) hacia adelante, saltando hols
+    function addHabil(iso,n,hols){
+      let d=new Date(iso+'T00:00:00'),cnt=0;
+      while(cnt<n){
+        d.setDate(d.getDate()+1);
+        const dow=d.getDay(),s=toISO(d);
+        if(dow!==0&&dow!==6&&!hols.has(s))cnt++;
+      }
+      return toISO(d);
+    }
+    // Resta n días hábiles hacia atrás; inclSat=true => sábado cuenta como hábil
+    function subHabil(iso,n,hols,inclSat){
+      let d=new Date(iso+'T00:00:00'),cnt=0;
+      while(cnt<n){
+        d.setDate(d.getDate()-1);
+        const dow=d.getDay(),s=toISO(d);
+        if(dow===0||hols.has(s)||(!inclSat&&dow===6))continue;
+        cnt++;
+      }
+      return toISO(d);
+    }
+    function calcPlazoMaximo(fechaDineroISO){
+      if(!fechaDineroISO)return null;
+      const y=parseInt(fechaDineroISO.slice(0,4));
+      const cl=new Set([...ferCL(y),...ferCL(y+1)]);
+      const us=new Set([...ferUS(y),...ferUS(y+1)]);
+      // Paso 1: +10 días hábiles desde distribución recibida (feriados CL)
+      let fpago=addHabil(fechaDineroISO,10,cl);
+      // Paso 2: si fecha pago cae en feriado USA, avanzar al siguiente hábil CL+USA
+      {
+        let d=new Date(fpago+'T00:00:00');
+        while(us.has(toISO(d))){
+          do{d.setDate(d.getDate()+1);}while(d.getDay()===0||d.getDay()===6||cl.has(toISO(d)));
+        }
+        fpago=toISO(d);
+      }
+      // Paso 3: -5 días hábiles (incluyendo sábado), feriados CL
+      let plazo=subHabil(fpago,5,cl,true);
+      // Paso 4: si cae viernes → jueves; si ese jueves es feriado CL → un día atrás
+      {
+        let d=new Date(plazo+'T00:00:00');
+        if(d.getDay()===5){
+          d.setDate(d.getDate()-1);
+          if(cl.has(toISO(d)))d.setDate(d.getDate()-1);
+        }
+        plazo=toISO(d);
+      }
+      return plazo;
+    }
+    // Plazo máximo suscripción: capital call − 2 días hábiles CL = fecha suscripción,
+    // luego − 5 días hábiles CL más = plazo máximo (total 7 días hábiles antes del capital call)
+    function calcPlazoMaximoSusc(fechaCapitalCallISO){
+      if(!fechaCapitalCallISO)return null;
+      const y=parseInt(fechaCapitalCallISO.slice(0,4));
+      const cl=new Set([...ferCL(y-1),...ferCL(y),...ferCL(y+1)]);
+      const fechaSusc=subHabil(fechaCapitalCallISO,2,cl,false);
+      return subHabil(fechaSusc,5,cl,false);
+    }
+
     function rowAlert(iso){
       const d=daysUntil(iso);
       if(d===null)return{};
@@ -432,13 +535,29 @@
       const[yr,setYr]=useState(ini.getFullYear());
       const[mo,setMo]=useState(ini.getMonth());
       const[open,setOpen]=useState(false);
+      const[pos,setPos]=useState({top:0,left:0,openUp:false});
       const ref=useRef(null);
+      const btnRef=useRef(null);
       useEffect(()=>{
         if(!open)return;
         const fn=e=>{if(ref.current&&!ref.current.contains(e.target))setOpen(false);};
         document.addEventListener('mousedown',fn);
         return()=>document.removeEventListener('mousedown',fn);
       },[open]);
+      function handleOpen(){
+        if(btnRef.current){
+          const r=btnRef.current.getBoundingClientRect();
+          const popupH=270,popupW=240;
+          const spaceBelow=window.innerHeight-r.bottom;
+          const openUp=spaceBelow<popupH&&r.top>popupH;
+          setPos({
+            top: openUp?r.top-popupH-4:r.bottom+4,
+            left: Math.min(r.left,window.innerWidth-popupW-8),
+            openUp
+          });
+        }
+        setOpen(o=>!o);
+      }
       function prev(){if(mo===0){setYr(y=>y-1);setMo(11);}else setMo(m=>m-1);}
       function next(){if(mo===11){setYr(y=>y+1);setMo(0);}else setMo(m=>m+1);}
       const dias=diasMes(yr,mo),off=primerDOW(yr,mo);
@@ -447,11 +566,11 @@
       for(let d=1;d<=dias;d++)cells.push(d);
       return(
         <div ref={ref} style={{position:'relative',width:'100%'}}>
-          <button type="button" className="dp-btn" style={!value?{color:'#475569'}:undefined} onClick={()=>setOpen(o=>!o)}>
+          <button ref={btnRef} type="button" className="dp-btn" style={!value?{color:'#475569'}:undefined} onClick={handleOpen}>
             📅 {value?fmtDate(value):ph}
           </button>
           {open&&(
-            <div className="dp-popup" onMouseDown={e=>e.stopPropagation()}>
+            <div className="dp-popup" style={{position:'fixed',top:pos.top,left:pos.left,zIndex:9999}} onMouseDown={e=>e.stopPropagation()}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
                 <button type="button" className="btn-icon" onClick={prev}>‹</button>
                 <span style={{fontSize:'.875rem',fontWeight:600,color:'#1e293b',textTransform:'capitalize'}}>{MESES[mo]} {yr}</span>
@@ -700,14 +819,12 @@
                   const autoEncId=(state.autoEncargados||{})[r.id]||null;
                   const isAutoEdit=autoEditId===r.id;
                   return(
-                    <tr key={'auto-'+r.id} style={{background:'#fee2e2',cursor:'default'}}
-                      onClick={()=>{if(ed)setEd(null);setAutoEditId(r.id);}}>
+                    <tr key={'auto-'+r.id} style={{background:'#fee2e2',cursor:'default'}}>
                       <td style={{color:'#991b1b',fontWeight:700}}>
-                        <span style={{display:'inline-block',background:'#dc2626',color:'#fff',borderRadius:4,padding:'1px 7px',fontSize:'.7rem',fontWeight:800,letterSpacing:'.04em',marginRight:8,verticalAlign:'middle'}}>AUTO</span>
                         ENVIAR CORREO ATRASO DE DISTRIBUCIÓN FONDO {r.fondo.toUpperCase()}
                       </td>
                       <td style={{color:'#b91c1c',fontWeight:600}}>{fmtDate(r.plazoMaximo)}</td>
-                      <td onClick={e=>e.stopPropagation()}>
+                      <td onClick={e=>{e.stopPropagation();if(!isAutoEdit)setAutoEditId(r.id);}} style={{cursor:'pointer'}}>
                         {isAutoEdit
                           ? <EncSelect value={autoEncId} onChange={v=>{dispatch({type:'SET_AUTO_ENC',id:r.id,encargadoId:v});setAutoEditId(null);}}/>
                           : <span style={{color:autoEncId?'#991b1b':'#94a3b8',fontStyle:autoEncId?'normal':'italic'}}>
@@ -745,6 +862,129 @@
       );
     }
 
+    // ── Contador Incidencias (estilo Shrek) ───────────────────────────────
+    function IncidenciasCounter({dias,color}){
+      const recién=dias===0;
+      return(
+        <div style={{display:'flex',alignItems:'stretch',borderRadius:10,overflow:'hidden',
+          boxShadow:'0 3px 14px rgba(45,90,20,.30)',border:'2px solid rgba(45,90,20,.22)',flexShrink:0}}>
+          {/* Sección pantano oscuro — cebolla */}
+          <div style={{background:'linear-gradient(180deg,#4a8c1c 0%,#2D5A14 100%)',
+            padding:'6px 11px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2}}>
+            <span style={{fontSize:'1.3rem',lineHeight:1}}>🧅</span>
+            <span style={{color:'rgba(255,255,255,.75)',fontSize:'.5rem',fontWeight:700,letterSpacing:'.12em',textTransform:'uppercase'}}>OGRO</span>
+          </div>
+          {/* Sección verde claro — número */}
+          <div style={{background:'#f3fbea',padding:'5px 13px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+            <span style={{fontSize:'.58rem',fontWeight:800,color:'#2D5A14',textTransform:'uppercase',letterSpacing:'.16em',lineHeight:1}}>
+              {recién?'¡Recién empezamos!':'Sin incidencias'}
+            </span>
+            <div style={{display:'flex',alignItems:'baseline',gap:3,marginTop:1}}>
+              <span style={{fontSize:'2rem',fontWeight:900,color,lineHeight:1}}>{dias}</span>
+              {!recién&&<span style={{fontSize:'.78rem',color:'#4a7c20',fontWeight:600}}>días</span>}
+            </div>
+          </div>
+          {/* Sección ciénaga — días */}
+          <div style={{background:'linear-gradient(180deg,#8B6914 0%,#6B4F12 100%)',
+            padding:'6px 10px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:1}}>
+            <span style={{fontSize:'.9rem',lineHeight:1}}>🌿</span>
+            <span style={{color:'rgba(255,255,255,.9)',fontSize:'.52rem',fontWeight:700,letterSpacing:'.08em',textTransform:'uppercase'}}>PANTANO</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Contador Día de Pago (penúltimo día hábil del mes) ────────────────
+    function PagoDiaCounter(){
+      const MESES_CORTO=['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
+      function penultimoDiaHabil(y,m){
+        // último día del mes
+        let d=new Date(y,m+1,0);d.setHours(0,0,0,0);
+        let count=0;
+        while(true){
+          const dow=d.getDay();
+          if(dow!==0&&dow!==6){count++;if(count===2)return new Date(d);}
+          d.setDate(d.getDate()-1);
+        }
+      }
+      const hoy=new Date();hoy.setHours(0,0,0,0);
+      let target=penultimoDiaHabil(hoy.getFullYear(),hoy.getMonth());
+      if(hoy>target){
+        let ny=hoy.getFullYear(),nm=hoy.getMonth()+1;
+        if(nm>11){nm=0;ny++;}
+        target=penultimoDiaHabil(ny,nm);
+      }
+      const iso=`${target.getFullYear()}-${String(target.getMonth()+1).padStart(2,'0')}-${String(target.getDate()).padStart(2,'0')}`;
+      const d=daysUntil(iso);
+      const esHoy=d===0;
+      const numColor=esHoy?'#1B5E20':d<=3?'#dc2626':d<=7?'#d97706':'#1B5E20';
+      return(
+        <div style={{display:'flex',alignItems:'stretch',borderRadius:10,overflow:'hidden',
+          boxShadow:'0 3px 14px rgba(160,112,0,.28)',border:'2px solid rgba(160,112,0,.22)',flexShrink:0}}>
+          {/* Sección verde dinero */}
+          <div style={{background:'linear-gradient(180deg,#2e7d32 0%,#1B5E20 100%)',
+            padding:'6px 11px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2}}>
+            <span style={{fontSize:'1.3rem',lineHeight:1}}>💰</span>
+            <span style={{color:'rgba(255,255,255,.75)',fontSize:'.5rem',fontWeight:700,letterSpacing:'.12em',textTransform:'uppercase'}}>PAGO</span>
+          </div>
+          {/* Sección crema — número */}
+          <div style={{background:'#fffdf0',padding:'5px 13px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+            <span style={{fontSize:'.58rem',fontWeight:800,color:'#1B5E20',textTransform:'uppercase',letterSpacing:'.16em',lineHeight:1}}>
+              {esHoy?'¡Hoy se paga!':'Día de pago'}
+            </span>
+            <div style={{display:'flex',alignItems:'baseline',gap:3,marginTop:1}}>
+              <span style={{fontSize:'2rem',fontWeight:900,color:numColor,lineHeight:1}}>
+                {esHoy?'💸':d}
+              </span>
+              {!esHoy&&<span style={{fontSize:'.78rem',color:'#78909c',fontWeight:600}}>días</span>}
+            </div>
+          </div>
+          {/* Sección dorada — fecha */}
+          <div style={{background:'linear-gradient(180deg,#C8A217 0%,#9A7A0A 100%)',
+            padding:'6px 10px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:0}}>
+            <span style={{color:'#fff',fontSize:'.85rem',fontWeight:900,lineHeight:1,textShadow:'0 1px 3px rgba(0,0,0,.35)'}}>{target.getDate()}</span>
+            <span style={{color:'rgba(255,255,255,.9)',fontSize:'.6rem',fontWeight:700,letterSpacing:'.1em'}}>{MESES_CORTO[target.getMonth()]}</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Contador Fiestas Patrias ───────────────────────────────────────────
+    function DieciochoCounter(){
+      const d=daysUntil('2026-09-18');
+      if(d===null)return null;
+      const llegó=d<=0;
+      return(
+        <div style={{display:'flex',alignItems:'stretch',borderRadius:10,overflow:'hidden',
+          boxShadow:'0 3px 14px rgba(0,57,166,.22)',border:'2px solid rgba(0,57,166,.18)',flexShrink:0}}>
+          {/* Sección azul — estrella */}
+          <div style={{background:'linear-gradient(180deg,#0050cc 0%,#0039A6 100%)',
+            padding:'6px 10px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2}}>
+            <span style={{color:'#fff',fontSize:'1.3rem',lineHeight:1,textShadow:'0 1px 4px rgba(0,0,0,.4)'}}>★</span>
+            <span style={{color:'rgba(255,255,255,.75)',fontSize:'.5rem',fontWeight:700,letterSpacing:'.12em',textTransform:'uppercase'}}>CL</span>
+          </div>
+          {/* Sección blanca — número */}
+          <div style={{background:'#fff',padding:'5px 13px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center'}}>
+            <span style={{fontSize:'.58rem',fontWeight:800,color:'#0039A6',textTransform:'uppercase',letterSpacing:'.18em',lineHeight:1}}>
+              {llegó?'¡Viva Chile!':'Fiestas Patrias'}
+            </span>
+            <div style={{display:'flex',alignItems:'baseline',gap:3,marginTop:1}}>
+              <span style={{fontSize:'2rem',fontWeight:900,color:llegó?'#0039A6':'#D52B1E',lineHeight:1}}>
+                {llegó?'🎉':d}
+              </span>
+              {!llegó&&<span style={{fontSize:'.78rem',color:'#64748b',fontWeight:600}}>días</span>}
+            </div>
+          </div>
+          {/* Sección roja — fecha */}
+          <div style={{background:'linear-gradient(180deg,#e83030 0%,#D52B1E 100%)',
+            padding:'6px 10px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:0}}>
+            <span style={{color:'#fff',fontSize:'.85rem',fontWeight:900,lineHeight:1,textShadow:'0 1px 3px rgba(0,0,0,.3)'}}>18</span>
+            <span style={{color:'rgba(255,255,255,.9)',fontSize:'.6rem',fontWeight:700,letterSpacing:'.1em',textTransform:'uppercase'}}>SEP</span>
+          </div>
+        </div>
+      );
+    }
+
     // ── Detalles a Considerar ──────────────────────────────────────────────
     function DetallesConsiderar(){
       const{state}=useStore();
@@ -760,11 +1000,9 @@
             <button type="button" className="btn-icon" title="Historial de incidencias" onClick={()=>setShowHist(true)}>📋</button>
           </div>
           <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 14px',borderBottom:'1px solid #dde6f0',flexShrink:0,gap:8}}>
-            <div style={{display:'flex',alignItems:'baseline',gap:6}}>
-              <span style={{color:'#64748b',fontSize:'.75rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.1em'}}>Sin incidencias</span>
-              <span style={{fontSize:'2.2rem',fontWeight:900,color,lineHeight:1}}>{dias}</span>
-              <span style={{color:'#64748b',fontSize:'.85rem'}}>días</span>
-            </div>
+            <IncidenciasCounter dias={dias} color={color}/>
+            <PagoDiaCounter/>
+            <DieciochoCounter/>
             <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:3}}>
               <button type="button" className="btn-danger" style={{fontSize:'.88rem',padding:'4px 10px'}} onClick={()=>setShowInc(true)}>↺ Registrar</button>
               {state.incidencias.length>0&&<span style={{color:'#94a3b8',fontSize:'.75rem'}}>Última: {fmtDate(state.incidencias[0].fecha)}</span>}
@@ -819,9 +1057,9 @@
                 {rows.map(row=>{
                   const isE=ed?.id===row.id;
                   return(
-                    <tr key={row.id} onClick={()=>!isE&&setEd({...row})} style={{cursor:isE?'default':'pointer',...(isE?{}:rowAlert(row.plazoMaximo||row.fechaCapitalCall))}}>
+                    <tr key={row.id} onClick={()=>!isE&&setEd({...row,plazoMaximo:row.plazoMaximo??calcPlazoMaximoSusc(row.fechaCapitalCall)})} style={{cursor:isE?'default':'pointer',...(isE?{}:rowAlert(row.plazoMaximo||row.fechaCapitalCall))}}>
                       <td>{isE?<FondoSelect value={ed.eventoPendiente} onChange={v=>setEd(p=>({...p,eventoPendiente:v}))}/>:row.eventoPendiente||<span style={{color:'#94a3b8',fontStyle:'italic'}}>—</span>}</td>
-                      <td>{isE?<DatePicker value={ed.fechaCapitalCall} onChange={v=>setEd(p=>({...p,fechaCapitalCall:v}))}/>:<span>{fmtDate(row.fechaCapitalCall)}{badgeAlert(row.fechaCapitalCall)}</span>}</td>
+                      <td>{isE?<DatePicker value={ed.fechaCapitalCall} onChange={v=>setEd(p=>({...p,fechaCapitalCall:v,plazoMaximo:calcPlazoMaximoSusc(v)}))}/>:<span>{fmtDate(row.fechaCapitalCall)}{badgeAlert(row.fechaCapitalCall)}</span>}</td>
                       <td>{isE?<DatePicker value={ed.plazoMaximo} onChange={v=>setEd(p=>({...p,plazoMaximo:v}))}/>:<span>{fmtDate(row.plazoMaximo)}{badgeAlert(row.plazoMaximo)}</span>}</td>
                       <td style={{textAlign:'center'}}>{!isE&&<input type="checkbox" className="op-cb" checked={false} onChange={()=>dispatch({type:'PROMO_S',id:row.id})} onClick={e=>e.stopPropagation()} title="Mover a En Curso"/>}</td>
                       <td><div style={{display:'flex',gap:2}}>
@@ -981,9 +1219,9 @@
                 {rows.map(row=>{
                   const isE=ed?.id===row.id;
                   return(
-                    <tr key={row.id} onClick={()=>!isE&&setEd({...row})} style={{cursor:isE?'default':'pointer',...(isE?{}:rowAlert(row.plazoMaximo))}}>
+                    <tr key={row.id} onClick={()=>!isE&&setEd({...row,plazoMaximo:row.plazoMaximo??calcPlazoMaximo(row.fechaDinero)})} style={{cursor:isE?'default':'pointer',...(isE?{}:rowAlert(row.plazoMaximo))}}>
                       <td>{isE?<FondoSelect value={ed.fondo} onChange={v=>setEd(p=>({...p,fondo:v}))}/>:row.fondo||<span style={{color:'#94a3b8',fontStyle:'italic'}}>—</span>}</td>
-                      <td>{isE?<DatePicker value={ed.fechaDinero} onChange={v=>setEd(p=>({...p,fechaDinero:v}))}/>:fmtDate(row.fechaDinero)}</td>
+                      <td>{isE?<DatePicker value={ed.fechaDinero} onChange={v=>setEd(p=>({...p,fechaDinero:v,plazoMaximo:calcPlazoMaximo(v)}))}/>:fmtDate(row.fechaDinero)}</td>
                       <td>{isE?<DatePicker value={ed.plazoMaximo} onChange={v=>setEd(p=>({...p,plazoMaximo:v}))}/>:<span>{fmtDate(row.plazoMaximo)}{badgeAlert(row.plazoMaximo)}</span>}</td>
                       <td style={{textAlign:'center'}}>{!isE&&<input type="checkbox" className="op-cb" checked={false} onChange={()=>dispatch({type:'PROMO_D',id:row.id})} onClick={e=>e.stopPropagation()} title="Mover a En Curso"/>}</td>
                       <td><div style={{display:'flex',gap:2}}>
