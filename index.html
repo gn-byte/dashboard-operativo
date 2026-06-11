@@ -186,6 +186,7 @@
     }
     // Anchos de columna por defecto (deben sumar 100 por tabla)
     const COL_DEF={
+      tp:[44,24,22,10],
       sp:[34,21,21,14,10],
       se:[20,18,18,17,13,14],
       dp:[36,22,22,12,8],
@@ -295,11 +296,13 @@
       incidencias:[],
       suscripcionesPendientes:[],suscripcionesEnCurso:[],suscripcionesHistory:[],
       distribucionesPendientes:[],distribucionesEnCurso:[],distribucionesHistory:[],
+      autoEncargados:{},
+      autoDismissed:[],
       fondos:FONDOS_INIT,
       notasDetalles:{left:'',right:''},
       layout:{
         leftPct:50,topPct:50,suscTopPct:50,distTopPct:50,
-        colWidths:{sp:[34,21,21,14,10],se:[20,18,18,17,13,14],dp:[36,22,22,12,8],de:[22,30,18,16,8,6]},
+        colWidths:{tp:[44,24,22,10],sp:[34,21,21,14,10],se:[20,18,18,17,13,14],dp:[36,22,22,12,8],de:[22,30,18,16,8,6]},
         sort:{sp:{key:null,dir:'asc'},se:{key:null,dir:'asc'},dp:{key:null,dir:'asc'},de:{key:null,dir:'asc'}},
       },
     };
@@ -350,6 +353,8 @@
         }
         case'ADD_FONDO':{const n=a.nombre.trim();if(!n||(s.fondos||[]).includes(n))return s;return{...s,fondos:[...(s.fondos||[]),n]};}
         case'DEL_FONDO':return{...s,fondos:(s.fondos||[]).filter(f=>f!==a.nombre)};
+        case'SET_AUTO_ENC':return{...s,autoEncargados:{...(s.autoEncargados||{}),[a.id]:a.encargadoId}};
+        case'DISMISS_AUTO':return{...s,autoDismissed:[...(s.autoDismissed||[]),a.id]};
         case'UPD_NOTA':return{...s,notasDetalles:{...(s.notasDetalles||{}),[a.side]:a.texto}};
         case'UPD_LAYOUT':return{...s,layout:{...(s.layout||INIT.layout),...a.v}};
         default:return s;
@@ -373,6 +378,8 @@
         distribucionesPendientes:toArr(data.distribucionesPendientes),
         distribucionesEnCurso:  toArr(data.distribucionesEnCurso),
         distribucionesHistory:  toArr(data.distribucionesHistory),
+        autoEncargados:         data.autoEncargados||{},
+        autoDismissed:          toArr(data.autoDismissed),
         fondos:                 data.fondos!=null?toArr(data.fondos):FONDOS_INIT,
         notasDetalles:          data.notasDetalles||{left:'',right:''},
         layout:{
@@ -656,6 +663,8 @@
     function TareasPendientes(){
       const{state,dispatch}=useStore();
       const[ed,setEd]=useState(null);
+      const[autoEditId,setAutoEditId]=useState(null);
+      const{tableRef,widths,startResize}=useColWidths('tp');
       function save(){
         if(!ed)return;
         const{isNew,...d}=ed;
@@ -665,7 +674,10 @@
       }
       const encNm=id=>id?(state.encargados.find(e=>e.id===id)?.name??'—'):'—';
       const rows=ed?.isNew?[...state.tareas,{id:ed.id,cosa:ed.cosa,plazo:ed.plazo,encargadoId:ed.encargadoId}]:state.tareas;
-      const autoAtrasos=(state.distribucionesPendientes||[]).filter(r=>r.fondo&&daysUntil(r.fechaDinero)!==null&&daysUntil(r.fechaDinero)<=0);
+      const dismissed=state.autoDismissed||[];
+      const autoAtrasos=(state.distribucionesPendientes||[]).filter(r=>
+        r.fondo&&!dismissed.includes(r.id)&&daysUntil(r.plazoMaximo)!==null&&daysUntil(r.plazoMaximo)<=0
+      );
       return(
         <div style={{display:'flex',flexDirection:'column',height:'100%',overflow:'hidden'}}>
           <div className="panel-header">
@@ -676,30 +688,46 @@
             </div>
           </div>
           <div style={{flex:1,overflowY:'auto',minHeight:0}}>
-            <table className="op-table">
+            <table className="op-table" ref={tableRef}>
               <thead><tr>
-                <th style={{width:'44%'}}>Things to do</th>
-                <th style={{width:'24%'}}>Plazo</th>
-                <th style={{width:'22%'}}>Encargado</th>
-                <th style={{width:'10%'}}></th>
+                <ColTh label="Things to do" width={widths[0]} colIdx={0} startResize={startResize}/>
+                <ColTh label="Plazo" width={widths[1]} colIdx={1} startResize={startResize}/>
+                <ColTh label="Encargado" width={widths[2]} colIdx={2} startResize={startResize}/>
+                <ColTh label="" width={widths[3]} colIdx={3} startResize={startResize} last/>
               </tr></thead>
               <tbody>
-                {autoAtrasos.map(r=>(
-                  <tr key={'auto-'+r.id} style={{background:'#fee2e2',cursor:'default'}}>
-                    <td style={{color:'#991b1b',fontWeight:700}}>
-                      <span style={{display:'inline-block',background:'#dc2626',color:'#fff',borderRadius:4,padding:'1px 7px',fontSize:'.7rem',fontWeight:800,letterSpacing:'.04em',marginRight:8,verticalAlign:'middle'}}>AUTO</span>
-                      ENVIAR CORREO ATRASO DE DISTRIBUCIÓN FONDO {r.fondo.toUpperCase()}
-                    </td>
-                    <td style={{color:'#b91c1c',fontWeight:600}}>{fmtDate(r.fechaDinero)}</td>
-                    <td style={{color:'#94a3b8',fontStyle:'italic'}}>—</td>
-                    <td></td>
-                  </tr>
-                ))}
+                {autoAtrasos.map(r=>{
+                  const autoEncId=(state.autoEncargados||{})[r.id]||null;
+                  const isAutoEdit=autoEditId===r.id;
+                  return(
+                    <tr key={'auto-'+r.id} style={{background:'#fee2e2',cursor:'default'}}
+                      onClick={()=>{if(ed)setEd(null);setAutoEditId(r.id);}}>
+                      <td style={{color:'#991b1b',fontWeight:700}}>
+                        <span style={{display:'inline-block',background:'#dc2626',color:'#fff',borderRadius:4,padding:'1px 7px',fontSize:'.7rem',fontWeight:800,letterSpacing:'.04em',marginRight:8,verticalAlign:'middle'}}>AUTO</span>
+                        ENVIAR CORREO ATRASO DE DISTRIBUCIÓN FONDO {r.fondo.toUpperCase()}
+                      </td>
+                      <td style={{color:'#b91c1c',fontWeight:600}}>{fmtDate(r.plazoMaximo)}</td>
+                      <td onClick={e=>e.stopPropagation()}>
+                        {isAutoEdit
+                          ? <EncSelect value={autoEncId} onChange={v=>{dispatch({type:'SET_AUTO_ENC',id:r.id,encargadoId:v});setAutoEditId(null);}}/>
+                          : <span style={{color:autoEncId?'#991b1b':'#94a3b8',fontStyle:autoEncId?'normal':'italic'}}>
+                              {autoEncId?encNm(autoEncId):'— clic para asignar'}
+                            </span>
+                        }
+                      </td>
+                      <td onClick={e=>e.stopPropagation()}>
+                        <button type="button" className="btn-icon" style={{color:'#dc2626'}}
+                          title="Ocultar esta alerta"
+                          onClick={()=>dispatch({type:'DISMISS_AUTO',id:r.id})}>🗑</button>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {rows.length===0&&autoAtrasos.length===0&&<tr><td colSpan={4} style={{color:'#94a3b8',textAlign:'center',padding:16,fontStyle:'italic'}}>Sin tareas — presiona ＋ para agregar</td></tr>}
                 {rows.map(row=>{
                   const isE=ed?.id===row.id;
                   return(
-                    <tr key={row.id} onClick={()=>!isE&&setEd({...row})} style={{cursor:isE?'default':'pointer'}}>
+                    <tr key={row.id} onClick={()=>{if(!isE){setAutoEditId(null);setEd({...row});};}} style={{cursor:isE?'default':'pointer'}}>
                       <td>{isE?<input type="text" value={ed.cosa} onChange={e=>setEd(p=>({...p,cosa:e.target.value}))} onKeyDown={e=>{if(e.key==='Enter')save();if(e.key==='Escape')setEd(null);}} autoFocus placeholder="Descripción"/>:row.cosa||<span style={{color:'#94a3b8',fontStyle:'italic'}}>—</span>}</td>
                       <td>{isE?<DatePicker value={ed.plazo} onChange={v=>setEd(p=>({...p,plazo:v}))}/>:<span style={{color:row.plazo?'#1e293b':'#94a3b8'}}>{fmtDate(row.plazo)}</span>}</td>
                       <td>{isE?<EncSelect value={ed.encargadoId} onChange={v=>setEd(p=>({...p,encargadoId:v}))}/>:<span style={{color:row.encargadoId?'#1e293b':'#94a3b8'}}>{encNm(row.encargadoId)}</span>}</td>
