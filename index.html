@@ -4,12 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard Operativo</title>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.24.7/babel.min.js"
+    onerror="document.getElementById('cdn-error').style.display='flex'"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html,body,#root{width:100vw;height:100vh;overflow:hidden;background:#dce6f0;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;font-size:22px;color:#0f172a}
@@ -108,7 +114,38 @@
   </style>
 </head>
 <body>
-  <div id="root"></div>
+  <!-- Mensaje de error CDN — visible sólo si falla algún script externo -->
+  <div id="cdn-error" style="display:none;position:fixed;inset:0;background:#fff3cd;
+    align-items:center;justify-content:center;flex-direction:column;gap:14px;
+    font-family:'Segoe UI',sans-serif;z-index:9999;padding:24px;text-align:center">
+    <div style="font-size:2rem">⚠️</div>
+    <div style="font-size:1.1rem;font-weight:700;color:#7c5700">No se pudo cargar el dashboard</div>
+    <div style="color:#555;max-width:420px;line-height:1.6">
+      Uno de los servicios externos (CDN) no respondió.<br>
+      Esto es temporal — suele resolverse en minutos.
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+      <button onclick="location.reload()" style="background:#042D59;color:#fff;border:none;
+        border-radius:6px;padding:10px 22px;font-size:1rem;cursor:pointer;font-family:inherit">
+        🔄 Reintentar
+      </button>
+      <button onclick="location.reload(true)" style="background:#fff;color:#042D59;
+        border:1px solid #042D59;border-radius:6px;padding:10px 22px;font-size:1rem;
+        cursor:pointer;font-family:inherit">
+        🗑 Limpiar caché y reintentar
+      </button>
+    </div>
+    <div style="color:#888;font-size:.8rem;margin-top:4px">
+      Si el problema persiste, contacta al administrador.
+    </div>
+  </div>
+
+  <div id="root">
+    <div style="display:flex;align-items:center;justify-content:center;height:100vh;
+      font-family:'Segoe UI',sans-serif;color:#475569;font-size:1rem;gap:10px">
+      <span style="font-size:1.4rem">⏳</span> Cargando dashboard...
+    </div>
+  </div>
   <script type="text/babel">
     const {useState,useEffect,useRef,useReducer,useContext,createContext} = React;
 
