@@ -219,7 +219,7 @@
     }
     function ferCL(y){
       const s=new Set();
-      [[0,1],[4,1],[4,21],[6,16],[7,15],[8,18],[8,19],[9,12],[10,1],[11,8],[11,25]].forEach(
+      [[0,1],[4,1],[4,21],[5,29],[6,16],[7,15],[8,18],[8,19],[9,12],[10,1],[11,8],[11,25]].forEach(
         ([m,d])=>s.add(`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`));
       if(y>=2021)s.add(`${y}-06-21`); // Día Nacional de los Pueblos Indígenas
       const e=easterSunday(y);
@@ -472,8 +472,16 @@
         case'UPD_TAREA':return{...s,tareas:s.tareas.map(t=>t.id===a.p.id?a.p:t)};
         case'DEL_TAREA':return{...s,tareas:s.tareas.filter(t=>t.id!==a.id)};
         case'INCIDENCIA':{
-          const cnt=daysAgo(s.incidenciaResetDate);
-          return{...s,incidenciaResetDate:todayISO(),incidencias:[{id:uuid(),fecha:todayISO(),motivo:a.motivo,contadorAlReset:cnt},...s.incidencias]};
+          const fecha=a.fecha||todayISO();
+          const from=new Date(s.incidenciaResetDate+'T00:00:00');
+          const to=new Date(fecha+'T00:00:00');
+          const cnt=Math.round((to-from)/86400000);
+          return{...s,incidenciaResetDate:fecha,incidencias:[{id:uuid(),fecha,motivo:a.motivo,contadorAlReset:cnt},...s.incidencias]};
+        }
+        case'UPD_INCIDENCIA':{
+          const updated=s.incidencias.map(i=>i.id===a.id?{...i,fecha:a.fecha,motivo:a.motivo}:i);
+          const maxFecha=updated.reduce((mx,i)=>i.fecha>mx?i.fecha:mx,'0000-00-00');
+          return{...s,incidencias:updated,incidenciaResetDate:maxFecha||s.incidenciaResetDate};
         }
         case'ADD_SP':return{...s,suscripcionesPendientes:[...s.suscripcionesPendientes,{id:uuid(),...a.p}]};
         case'UPD_SP':return{...s,suscripcionesPendientes:s.suscripcionesPendientes.map(x=>x.id===a.p.id?a.p:x)};
@@ -582,7 +590,7 @@
     function useAuth(){return useContext(AuthCtx);}
 
     // ── DatePicker ─────────────────────────────────────────────────────────
-    function DatePicker({value,onChange,ph='Seleccionar'}){
+    function DatePicker({value,onChange,ph='Seleccionar',maxDate=null}){
       const hoy=new Date();
       const ini=value?new Date(value+'T00:00:00'):hoy;
       const[yr,setYr]=useState(ini.getFullYear());
@@ -612,7 +620,14 @@
         setOpen(o=>!o);
       }
       function prev(){if(mo===0){setYr(y=>y-1);setMo(11);}else setMo(m=>m-1);}
-      function next(){if(mo===11){setYr(y=>y+1);setMo(0);}else setMo(m=>m+1);}
+      function next(){
+        if(maxDate){
+          const md=new Date(maxDate+'T00:00:00');
+          if(yr>md.getFullYear()||(yr===md.getFullYear()&&mo>=md.getMonth()))return;
+        }
+        if(mo===11){setYr(y=>y+1);setMo(0);}else setMo(m=>m+1);
+      }
+      const canNext=!maxDate||(()=>{const md=new Date(maxDate+'T00:00:00');return yr<md.getFullYear()||(yr===md.getFullYear()&&mo<md.getMonth());})();
       const dias=diasMes(yr,mo),off=primerDOW(yr,mo);
       const cells=[];
       for(let i=0;i<off;i++)cells.push(null);
@@ -627,17 +642,23 @@
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
                 <button type="button" className="btn-icon" onClick={prev}>‹</button>
                 <span style={{fontSize:'.875rem',fontWeight:600,color:'#1e293b',textTransform:'capitalize'}}>{MESES[mo]} {yr}</span>
-                <button type="button" className="btn-icon" onClick={next}>›</button>
+                <button type="button" className="btn-icon" onClick={next} disabled={!canNext} style={{opacity:canNext?1:.3,cursor:canNext?'pointer':'default'}}>›</button>
               </div>
               <div className="dp-grid">
                 {DOW.map(d=><span key={d} className="dp-dow">{d}</span>)}
-                {cells.map((day,i)=>day===null?<span key={'e'+i}/>:(
-                  <button key={day} type="button"
-                    className={'dp-day'+(isHoy(yr,mo,day)?' today':'')+(value===isoPartes(yr,mo,day)?' selected':'')}
-                    onClick={()=>{onChange(isoPartes(yr,mo,day));setOpen(false);}}>
-                    {day}
-                  </button>
-                ))}
+                {cells.map((day,i)=>{
+                  if(day===null)return<span key={'e'+i}/>;
+                  const iso=isoPartes(yr,mo,day);
+                  const afterMax=maxDate&&iso>maxDate;
+                  return(
+                    <button key={day} type="button" disabled={afterMax}
+                      className={'dp-day'+(isHoy(yr,mo,day)?' today':'')+(value===iso?' selected':'')}
+                      style={afterMax?{color:'#cbd5e1',cursor:'default'}:undefined}
+                      onClick={()=>{if(!afterMax){onChange(iso);setOpen(false);}}}>
+                      {day}
+                    </button>
+                  );
+                })}
               </div>
               {value&&<button type="button" className="btn-ghost" style={{width:'100%',marginTop:6,fontSize:'.8rem'}} onClick={()=>{onChange(null);setOpen(false);}}>Limpiar fecha</button>}
             </div>
@@ -669,19 +690,49 @@
 
     // ── Historial Modals ───────────────────────────────────────────────────
     function IncidenciaHistModal({isOpen,onClose,entries}){
+      const{dispatch}=useStore();
+      const[editId,setEditId]=useState(null);
+      const[editFecha,setEditFecha]=useState('');
+      const[editMot,setEditMot]=useState('');
+      const hoyISO=todayISO();
+      function startEdit(e){setEditId(e.id);setEditFecha(e.fecha);setEditMot(e.motivo);}
+      function cancelEdit(){setEditId(null);}
+      function saveEdit(){
+        if(!editFecha||!editMot.trim())return;
+        dispatch({type:'UPD_INCIDENCIA',id:editId,fecha:editFecha,motivo:editMot.trim()});
+        setEditId(null);
+      }
       return(
         <Modal isOpen={isOpen} onClose={onClose} title="Historial de Incidencias" wide>
           <div style={{overflowY:'auto',maxHeight:'60vh'}}>
             {entries.length===0?<p style={{color:'#94a3b8',fontSize:'.875rem',textAlign:'center',padding:16}}>Sin incidencias.</p>:(
               <table className="op-table">
-                <thead><tr><th>Fecha</th><th>Motivo</th><th>Días al reset</th></tr></thead>
-                <tbody>{entries.map(e=>(
-                  <tr key={e.id}>
-                    <td style={{whiteSpace:'nowrap'}}>{fmtDate(e.fecha)}</td>
-                    <td>{e.motivo}</td>
-                    <td style={{textAlign:'center'}}>{e.contadorAlReset} días</td>
-                  </tr>
-                ))}</tbody>
+                <thead><tr><th>Fecha</th><th>Motivo</th><th>Días al reset</th><th style={{width:56}}></th></tr></thead>
+                <tbody>{entries.map(e=>{
+                  const isEd=editId===e.id;
+                  return(
+                    <tr key={e.id}>
+                      <td style={{whiteSpace:'nowrap',minWidth:160}}>
+                        {isEd?<DatePicker value={editFecha} onChange={v=>setEditFecha(v||editFecha)} maxDate={hoyISO} ph="Seleccionar"/>:fmtDate(e.fecha)}
+                      </td>
+                      <td>
+                        {isEd?<input type="text" value={editMot} onChange={ev=>setEditMot(ev.target.value)}
+                          style={{background:'#fff',border:'1px solid #c8d8ec',borderRadius:4,color:'#1e293b',padding:'3px 6px',fontSize:'.875rem',width:'100%'}}/>:e.motivo}
+                      </td>
+                      <td style={{textAlign:'center',whiteSpace:'nowrap'}}>{e.contadorAlReset} días</td>
+                      <td style={{whiteSpace:'nowrap'}}>
+                        {isEd?(
+                          <div style={{display:'flex',gap:4}}>
+                            <button type="button" className="btn-primary" style={{fontSize:'.75rem',padding:'3px 8px'}} onClick={saveEdit} disabled={!editFecha||!editMot.trim()}>✓</button>
+                            <button type="button" className="btn-ghost" style={{fontSize:'.75rem',padding:'3px 8px'}} onClick={cancelEdit}>✕</button>
+                          </div>
+                        ):(
+                          <button type="button" className="btn-icon" style={{color:'#64748b'}} title="Editar" onClick={()=>startEdit(e)}>✏</button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}</tbody>
               </table>
             )}
           </div>
@@ -713,21 +764,35 @@
     function IncidentModal({isOpen,onClose,cnt}){
       const{dispatch}=useStore();
       const[mot,setMot]=useState('');
+      const[fecha,setFecha]=useState(todayISO());
       function confirm(){
-        if(!mot.trim())return;
-        dispatch({type:'INCIDENCIA',motivo:mot.trim()});
-        setMot('');onClose();
+        if(!mot.trim()||!fecha)return;
+        dispatch({type:'INCIDENCIA',motivo:mot.trim(),fecha});
+        setMot('');setFecha(todayISO());onClose();
       }
+      function handleClose(){setMot('');setFecha(todayISO());onClose();}
+      const hoyISO=todayISO();
+      const diasDesdeUltima=fecha?(()=>{
+        const d=daysUntil(fecha);
+        return d===null?null:-d; // daysUntil da negativo para pasado
+      })():null;
       return(
-        <Modal isOpen={isOpen} onClose={()=>{setMot('');onClose();}} title="Registrar Incidencia">
-          <div style={{color:'#b45309',fontSize:'.875rem'}}>⚠ El contador se reiniciará a 0. Actualmente: <strong>{cnt}</strong> días.</div>
+        <Modal isOpen={isOpen} onClose={handleClose} title="Registrar Incidencia">
+          <div style={{color:'#b45309',fontSize:'.875rem'}}>⚠ El contador se reiniciará desde la fecha seleccionada. Actualmente: <strong>{cnt}</strong> días.</div>
+          <div style={{display:'flex',flexDirection:'column',gap:4}}>
+            <label style={{color:'#64748b',fontSize:'.75rem',fontWeight:600,letterSpacing:'.06em',textTransform:'uppercase'}}>Fecha de la incidencia</label>
+            <DatePicker value={fecha} onChange={v=>setFecha(v||hoyISO)} maxDate={hoyISO} ph="Seleccionar fecha"/>
+            {fecha&&fecha<hoyISO&&<span style={{color:'#6b7280',fontSize:'.75rem',marginTop:2}}>
+              El conteo partirá desde esta fecha — ya muestra {-daysUntil(fecha)} días acumulados.
+            </span>}
+          </div>
           <div style={{display:'flex',flexDirection:'column',gap:4}}>
             <label style={{color:'#64748b',fontSize:'.75rem',fontWeight:600,letterSpacing:'.06em',textTransform:'uppercase'}}>Motivo</label>
-            <textarea className="modal-ta" rows={4} value={mot} onChange={e=>setMot(e.target.value)} placeholder="Describe la incidencia..." autoFocus/>
+            <textarea className="modal-ta" rows={3} value={mot} onChange={e=>setMot(e.target.value)} placeholder="Describe la incidencia..." autoFocus/>
           </div>
           <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-            <button type="button" className="btn-ghost" onClick={()=>{setMot('');onClose();}}>Cancelar</button>
-            <button type="button" className="btn-danger" onClick={confirm} disabled={!mot.trim()}>Confirmar</button>
+            <button type="button" className="btn-ghost" onClick={handleClose}>Cancelar</button>
+            <button type="button" className="btn-danger" onClick={confirm} disabled={!mot.trim()||!fecha}>Confirmar</button>
           </div>
         </Modal>
       );
@@ -851,12 +916,14 @@
     function PagoDiaCounter(){
       const MESES_CORTO=['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
       function penultimoDiaHabil(y,m){
-        // último día del mes
+        const cl=ferCL(y);
+        const us=ferUS(y);
         let d=new Date(y,m+1,0);d.setHours(0,0,0,0);
         let count=0;
         while(true){
           const dow=d.getDay();
-          if(dow!==0&&dow!==6){count++;if(count===2)return new Date(d);}
+          const iso=toISO(d);
+          if(dow!==0&&dow!==6&&!cl.has(iso)&&!us.has(iso)){count++;if(count===2)return new Date(d);}
           d.setDate(d.getDate()-1);
         }
       }
@@ -957,7 +1024,8 @@
       const user=useAuth();
       const[showInc,setShowInc]=useState(false);
       const[showHist,setShowHist]=useState(false);
-      const dias=daysAgo(state.incidenciaResetDate);
+      const latestFecha=state.incidencias&&state.incidencias.length>0?[...state.incidencias].sort((a,b)=>b.fecha.localeCompare(a.fecha))[0].fecha:state.incidenciaResetDate;
+      const dias=daysAgo(latestFecha);
       const color=dias<7?'#dc2626':dias<30?'#d97706':'#16a34a';
       return(
         <div className="top-bar">
